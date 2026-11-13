@@ -23,117 +23,103 @@ app.get('/', (req, res) => {
     res.send('Olá, cliente!');
 });
 
-app.get('/api/musicas', (req, res) => {
-    const musicas = musicaDAO.listarTodas();
-
-    const resumo = [];
-
-    for (let i = 0; i < musicas.length; i++) {
-        const m = musicas[i];
-
-        resumo.push({
+app.get('/api/musicas', async (req, res, next) => {
+    try {
+        const musicas = await musicaDAO.listarTodas();
+        const resumo = musicas.map(m => ({
             id: m.id,
             nome: m.nome,
             artista: m.artista,
             totalPartes: m.partes.length
-        });
+        }));
+        res.json(resumo);
+    } catch (err) {
+        next(err);
     }
-
-    res.json(resumo);
 });
 
-app.get('/api/musicas/:id', (req, res) => {
-    const id = Number(req.params.id);
+app.get('/api/musicas/:id', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const musica = await musicaDAO.buscarPorId(id);
 
-    const musica = musicaDAO.buscarPorId(id);
-
-    if (!musica) {
-        return res.status(404).json({
-            erro: `Música com id ${id} não encontrada`
-        });
+        if (!musica) {
+            return res.status(404).json({ erro: `Música com id ${id} não encontrada` });
+        }
+        res.json(musica);
+    } catch (err) {
+        next(err);
     }
-
-    res.json(musica);
 });
 
-app.post('/api/musicas', (req, res) => {
-    const { nome, artista } = req.body;
-
-    if (!nome || !artista) {
-        return res.status(400).json({
-            erro: 'Campos obrigatórios: nome, artista'
-        });
+app.post('/api/musicas', async (req, res, next) => {
+    try {
+        const { nome, artista } = req.body;
+        if (!nome || !artista) {
+            return res.status(400).json({ erro: 'Campos obrigatórios: nome, artista' });
+        }
+        const novaMusica = await musicaDAO.inserir(nome, artista);
+        res.status(201).json(novaMusica);
+    } catch (err) {
+        next(err);
     }
-
-    const novaMusica = musicaDAO.inserir(nome, artista);
-
-    res.status(201).json(novaMusica);
 });
 
-app.put('/api/musicas/:id', (req, res) => {
-    const id = Number(req.params.id);
-    const { nome, artista } = req.body;
-
-    if (!nome || !artista) {
-        return res.status(400).json({
-            erro: 'Campos obrigatórios: nome, artista'
-        });
+app.put('/api/musicas/:id', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const { nome, artista } = req.body;
+        if (!nome || !artista) {
+            return res.status(400).json({ erro: 'Campos obrigatórios: nome, artista' });
+        }
+        const musicaAtualizada = await musicaDAO.atualizar(id, nome, artista);
+        if (!musicaAtualizada) {
+            return res.status(404).json({ erro: `Música com id ${id} não encontrada` });
+        }
+        res.status(200).json(musicaAtualizada);
+    } catch (err) {
+        next(err);
     }
-
-    const musicaAtualizada = musicaDAO.atualizar(id, nome, artista);
-
-    if (!musicaAtualizada) {
-        return res.status(404).json({
-            erro: `Música com id ${id} não encontrada`
-        });
-    }
-
-    res.status(200).json(musicaAtualizada);
 });
 
-app.delete('/api/musicas/:id', (req, res) => {
-    const id = Number(req.params.id);
-
-    const musicaRemovida = musicaDAO.remover(id);
-
-    if (!musicaRemovida) {
-        return res.status(404).json({
-            erro: `Música com id ${id} não encontrada`
-        });
+app.delete('/api/musicas/:id', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const musicaRemovida = await musicaDAO.remover(id);
+        if (!musicaRemovida) {
+            return res.status(404).json({ erro: `Música com id ${id} não encontrada` });
+        }
+        res.status(200).json(musicaRemovida);
+    } catch (err) {
+        next(err);
     }
-
-    res.status(200).json(musicaRemovida);
 });
 
-app.post('/api/musicas/:id/partes', (req, res) => {
-    const id = Number(req.params.id);
-    const { letra, tempoEspera, tag } = req.body;
+app.post('/api/musicas/:id/partes', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const { letra, tempoEspera, tag } = req.body;
 
-    if (!letra || !tempoEspera || !tag) {
-        return res.status(400).json({
-            erro: 'Campos obrigatórios: letra, tempoEspera, tag'
-        });
+        if (!letra || !tempoEspera || !tag) {
+            return res.status(400).json({ erro: 'Campos obrigatórios: letra, tempoEspera, tag' });
+        }
+
+        const musica = await musicaDAO.buscarPorId(id);
+        if (!musica) {
+            return res.status(404).json({ erro: `Música com id ${id} não encontrada` });
+        }
+
+        const parte = new Parte(letra, tempoEspera, tag);
+        const adicionada = await musicaDAO.adicionarPartes(id, parte);
+
+        if (!adicionada) {
+            return res.status(404).json({ erro: `Música com id ${id} não encontrada` });
+        }
+
+        res.status(201).json(musica);
+    } catch (err) {
+        next(err);
     }
-
-    const musica = musicaDAO.buscarPorId(id);
-
-    if (!musica) {
-        return res.status(404).json({
-            erro: `Música com id ${id} não encontrada`
-        });
-    }
-
-    const parte = new Parte(letra, tempoEspera, tag);
-
-    const adicionada = musicaDAO.adicionarPartes(id, parte);
-
-    if (!adicionada) {
-        return res.status(404).json({
-            erro: `Música com id ${id} não encontrada`
-        });
-    }
-
-    res.status(201).json(musica);
 });
 
 // Middleware para tratamento de erros

@@ -14,10 +14,12 @@
     "serve": "nodemon app"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.119.0",
     "chalk": "^4.1.2",
+    "dotenv": "^18.0.10",
     "express": "^5.2.1"
   },
-  "engines":{
+  "engines": {
     "node": ">=20.0.0"
   }
 }

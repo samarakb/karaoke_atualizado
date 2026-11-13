@@ -1,214 +1,177 @@
+const supabase = require('../supabaseClient');
 const { Musica } = require('../karaoke/musica');
 const { Parte } = require('../karaoke/parte');
 
 class MusicaDAO {
-    constructor() {
-        // "banco de dados" em memória — array de objetos Musica
-        this.musicas = [];
-        this.proximoId = 0;
-
-        this._carregarDadosIniciais();
+    
+    // Transforma a linha do banco no objeto da classe Musica
+    _paraMusica(linha) {
+        // O Supabase pode trazer o artista aninhado ou só o id dependendo da consulta
+        const nomeArtista = linha.artistas ? linha.artistas.nome : 'Artista Desconhecido';
+        const musica = new Musica(linha.nome, nomeArtista);
+        musica.id = linha.id;
+        return musica;
     }
 
-    // Retorna todas as músicas
-    listarTodas() {
-        return this.musicas;
+    // Transforma a linha do banco no objeto da classe Parte
+    _paraParte(linha) {
+        const parte = new Parte(linha.letra, linha.tempo_espera, linha.tag);
+        parte.id = linha.id;
+        parte.ordem = linha.ordem;
+        return parte;
     }
 
-    // Busca uma música pelo ID
-    buscarPorId(id) {
-        return this.musicas.find(m => m.id === id) || null;
+    async listarTodas() {
+        const { data, error } = await supabase
+            .from('musicas')
+            .select('id, nome, artistas(nome)')
+            .order('id');
+
+        if (error) throw new Error('Erro ao listar músicas: ' + error.message);
+
+        return data.map(linha => this._paraMusica(linha));
     }
 
-    // Insere uma nova música e retorna o objeto criado (com ID)
-    inserir(nome, artista) {
-        const novaMusica = new Musica(nome, artista);
-        novaMusica.id = this.proximoId++;
-        this.musicas.push(novaMusica);
-        return novaMusica;
-    }
+    async buscarPorId(id) {
+        // 1. Busca a música
+        const { data: musicaData, error: erroMusica } = await supabase
+            .from('musicas')
+            .select('id, nome, artistas(nome)')
+            .eq('id', id)
+            .maybeSingle(); // maybeSingle retorna null se não achar, em vez de erro
 
-    // Adiciona uma Parte a uma música existente
-    adicionarPartes(idMusica, parte) {
-        if (parte instanceof Parte) {
-            const musica = this.buscarPorId(idMusica);
+        if (erroMusica) throw new Error('Erro ao buscar música: ' + erroMusica.message);
+        if (!musicaData) return null;
 
-            if (musica != null) {
-                musica.addParte(parte);
-                return true;
-            } else {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    }
+        const musica = this._paraMusica(musicaData);
 
-    // Atualiza nome e artista de uma música existente
-    atualizar(id, nome, artista) {
-        const musica = this.buscarPorId(id);
+        // 2. Busca as partes dessa música
+        const { data: partesData, error: erroPartes } = await supabase
+            .from('partes')
+            .select('id, ordem, letra, tempo_espera, tag')
+            .eq('musica_id', id)
+            .order('ordem'); // Ordem é muito importante para o karaokê!
 
-        if (!musica) return null;
+        if (erroPartes) throw new Error('Erro ao buscar partes: ' + erroPartes.message);
 
-        musica.nome = nome;
-        musica.artista = artista;
+        // 3. Adiciona as partes na música
+        partesData.forEach(linha => {
+            musica.addParte(this._paraParte(linha));
+        });
 
         return musica;
     }
 
-    // Remove uma música pelo ID
-    remover(id) {
-        const indice = this.musicas.findIndex(m => m.id === id);
+    async inserir(nome, artistaNome) {
+        // O banco exige um artista_id. Primeiro, buscamos ou criamos o artista.
+        let { data: artistaData, error: erroBusca } = await supabase
+            .from('artistas')
+            .select('id')
+            .eq('nome', artistaNome)
+            .maybeSingle();
 
-        if (indice === -1) return null;
+        if (erroBusca) throw new Error('Erro ao buscar artista: ' + erroBusca.message);
 
-        return this.musicas.splice(indice, 1)[0];
+        if (!artistaData) {
+            const { data: novoArtista, error: erroInsertArtista } = await supabase
+                .from('artistas')
+                .insert({ nome: artistaNome })
+                .select()
+                .single();
+            
+            if (erroInsertArtista) throw new Error('Erro ao criar artista: ' + erroInsertArtista.message);
+            artistaData = novoArtista;
+        }
+
+        // Agora inserimos a música
+        const { data: musicaData, error: erroInsert } = await supabase
+            .from('musicas')
+            .insert({ nome: nome, artista_id: artistaData.id })
+            .select('id, nome, artistas(nome)')
+            .single();
+
+        if (erroInsert) throw new Error('Erro ao criar música: ' + erroInsert.message);
+
+        return this._paraMusica(musicaData);
     }
 
-    // Carrega os dados iniciais
-    _carregarDadosIniciais() {
-        const myHero = this.inserir('My Hero', 'Foo Fighters');
+    async adicionarPartes(idMusica, parte) {
+        if (!(parte instanceof Parte)) return false;
 
-        myHero.addParte(new Parte(
-            'Too alarmin now to talk about\nTake your pictures down and shake it out',
-            11000,
-            'verso1'
-        ));
+        // Descobrir a próxima "ordem" (0, 1, 2...)
+        const { data: partesExistentes, error: erroBusca } = await supabase
+            .from('partes')
+            .select('ordem')
+            .eq('musica_id', idMusica)
+            .order('ordem', { ascending: false })
+            .limit(1);
 
-        myHero.addParte(new Parte(
-            'Truth or consequence, say it aloud\nUse that evidence, race it around',
-            10000,
-            'verso2'
-        ));
+        if (erroBusca) throw new Error('Erro ao buscar partes: ' + erroBusca.message);
 
-        myHero.addParte(new Parte(
-            'There goes my hero',
-            4000,
-            'refrão1'
-        ));
+        const proximaOrdem = partesExistentes.length > 0 ? partesExistentes[0].ordem + 1 : 0;
 
-        myHero.addParte(new Parte(
-            'Watch him as he goes',
-            4000,
-            'refrão2'
-        ));
+        const { error: erroInsert } = await supabase
+            .from('partes')
+            .insert({
+                musica_id: idMusica,
+                ordem: proximaOrdem,
+                letra: parte.letra,
+                tempo_espera: parte.tempoEspera,
+                tag: parte.tag
+            });
 
-        myHero.addParte(new Parte(
-            "He's ordinary",
-            5000,
-            'refrão3'
-        ));
+        if (erroInsert) throw new Error('Erro ao adicionar parte: ' + erroInsert.message);
+        return true;
+    }
 
-        myHero.addParte(new Parte(
-            "Don't the best of them bleed it out",
-            5000,
-            'verso3'
-        ));
+    async atualizar(id, nome, artistaNome) {
+        // 1. Buscar ou criar o novo artista
+        let { data: artistaData, error: erroBusca } = await supabase
+            .from('artistas')
+            .select('id')
+            .eq('nome', artistaNome)
+            .maybeSingle();
 
-        myHero.addParte(new Parte(
-            'While the rest of them peter out?',
-            5000,
-            'verso4'
-        ));
+        if (erroBusca) throw new Error('Erro ao buscar artista: ' + erroBusca.message);
 
-        myHero.addParte(new Parte(
-            'Kudos, my hero\nLeavin all the best',
-            6000,
-            'refrão4'
-        ));
+        if (!artistaData) {
+            const { data: novoArtista, error: erroInsertArtista } = await supabase
+                .from('artistas')
+                .insert({ nome: artistaNome })
+                .select()
+                .single();
+            
+            if (erroInsertArtista) throw new Error('Erro ao criar artista: ' + erroInsertArtista.message);
+            artistaData = novoArtista;
+        }
 
-        myHero.addParte(new Parte(
-            'You know my hero\nThe one thats on',
-            6000,
-            'refrão5'
-        ));
+        // 2. Atualizar a música
+        const { data: musicaData, error: erroUpdate } = await supabase
+            .from('musicas')
+            .update({ nome: nome, artista_id: artistaData.id })
+            .eq('id', id)
+            .select('id, nome, artistas(nome)')
+            .maybeSingle();
 
-        
-        const decida = this.inserir('Decida', 'Milionário & José Rico');
+        if (erroUpdate) throw new Error('Erro ao atualizar música: ' + erroUpdate.message);
+        if (!musicaData) return null;
 
-        decida.addParte(new Parte( //tive que modificar essa parte que estava no antigo karaokê para se encaixar no DAO
-            'Sente aqui comigo no sofá e vamos conversar \nÉ hora de abrir o jogo',
-            8000,
-            'verso1'
-        ));
+        return this._paraMusica(musicaData);
+    }
 
-        decida.addParte(new Parte(
-            'Nosso amor está indo água abaixo \nSe deixar, vira relaxo \nTemporal apaga o fogo',
-            7000,
-            'verso2'
-        ));
+    async remover(id) {
+        // Como o banco tem "on delete cascade", as partes vão sumir junto automaticamente
+        const { data, error } = await supabase
+            .from('musicas')
+            .delete()
+            .eq('id', id)
+            .select('id, nome, artistas(nome)')
+            .maybeSingle();
 
-        decida.addParte(new Parte(
-            'Por que você não olha nos meus olhos? \nSeu beijo não tem o mesmo sabor',
-            4000,
-            'verso3'
-        ));
+        if (error) throw new Error('Erro ao remover música: ' + error.message);
+        if (!data) return null;
 
-        decida.addParte(new Parte(
-            'O seu carinho não me faz dormir \nNem sua quando a gente faz amor',
-            7000,
-            'verso4'
-        ));
-
-        decida.addParte(new Parte(
-            'Você só vai tomar banho sozinha \nNa hora do jantar, me diz que já comeu',
-            7000,
-            'verso5'
-        ));
-
-        decida.addParte(new Parte(
-            'Não vê novelas e nem liga o som \nDiz que não tem nada bom que satisfaça o ego seu',
-            8000,
-            'verso6'
-        ));
-
-        decida.addParte(new Parte(
-            'Você se esqueceu \nQue dentro desta casa eu existo',
-            8000,
-            'verso7'
-        ));
-
-        decida.addParte(new Parte(
-            'Que em 82 casou comigo \nPor isso exijo uma explicação',
-            6000,
-            'verso8'
-        ));
-
-        decida.addParte(new Parte(
-            'Se sou eu que te incomoda \nPra te fazer feliz, fiz o que pude',
-            6000,
-            'verso9'
-        ));
-
-        decida.addParte(new Parte(
-            'Mas o incomodado é que se mude \nVocê quem vai tomar a decisão',
-            7000,
-            'verso10'
-        ));
-
-        decida.addParte(new Parte(
-            'Decida \nSe vai embora ou ficar comigo',
-            7000,
-            'refrao1'
-        ));
-
-        decida.addParte(new Parte(
-            'Se vai me respeitar como marido \nPois desse jeito não estou aguentando',
-            7000,
-            'refrao2'
-        ));
-
-        decida.addParte(new Parte(
-            'Decida \nOu pare de uma vez com esse delírio',
-            7000,
-            'refrao3'
-        ));
-
-        decida.addParte(new Parte(
-            'Talvez você precise usar colírio \nPra enxergar o quanto ainda te amo',
-            7000,
-            'refrao4'
-        ));
+        return this._paraMusica(data);
     }
 }
 
